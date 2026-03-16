@@ -1,0 +1,49 @@
+name: OneOnOne
+options:
+  deploymentTarget:
+    macOS: "14.0"
+  xcodeVersion: "16.0"
+  bundleIdPrefix: com.markstudios
+
+packages:
+  OneOnOneKit:
+    path: Packages/OneOnOneKit
+  HotKey:
+    url: https://github.com/soffes/HotKey
+    from: "0.2.1"
+
+targets:
+  OneOnOne:
+    type: application
+    platform: macOS
+    sources:
+      - OneOnOne
+    entitlements:
+      path: OneOnOne/OneOnOne.entitlements
+      properties:
+        com.apple.security.app-sandbox: true
+        com.apple.security.network.client: true
+        com.apple.security.network.server: true
+        com.apple.developer.networking.multicast: true
+    info:
+      path: OneOnOne/Info.plist
+      properties:
+        LSUIElement: true
+        NSLocalNetworkUsageDescription: "1on1 uses your local network to discover and message your partner."
+        NSBonjourServices:
+          - _1on1._tcp
+          - _1on1._udp
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.markstudios.OneOnOne
+        MARKETING_VERSION: "1.0.0"
+        CURRENT_PROJECT_VERSION: "1"
+        SWIFT_VERSION: "6.0"
+        MACOSX_DEPLOYMENT_TARGET: "14.0"
+        GENERATE_INFOPLIST_FILE: false
+    dependencies:
+      - package: OneOnOneKit
+        product: OneOnOneEngine
+      - package: OneOnOneKit
+        product: OneOnOneUI
+      - package: HotKey
