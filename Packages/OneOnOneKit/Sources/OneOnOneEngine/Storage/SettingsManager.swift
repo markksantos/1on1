@@ -37,6 +37,8 @@ public final class SettingsManager: @unchecked Sendable {
         static let quietHoursEnd = "settings.quietHoursEnd"
         static let launchAtLogin = "settings.launchAtLogin"
         static let roomCode = "settings.roomCode"
+        static let overlayTimeout = "settings.overlayTimeout"
+        static let composeDraft = "settings.composeDraft"
     }
 
     public var partnerName: String {
@@ -74,6 +76,15 @@ public final class SettingsManager: @unchecked Sendable {
         didSet { Self.defaults.set(roomCode, forKey: Key.roomCode) }
     }
 
+    /// Overlay auto-dismiss timeout in seconds. 0 means never auto-dismiss.
+    public var overlayTimeout: TimeInterval {
+        didSet { Self.defaults.set(overlayTimeout, forKey: Key.overlayTimeout) }
+    }
+
+    public var composeDraft: String {
+        didSet { Self.defaults.set(composeDraft, forKey: Key.composeDraft) }
+    }
+
     public init() {
         self.partnerName = Self.defaults.string(forKey: Key.partnerName) ?? ""
         self.overlaySize = OverlaySize(rawValue: Self.defaults.string(forKey: Key.overlaySize) ?? "") ?? .medium
@@ -81,6 +92,8 @@ public final class SettingsManager: @unchecked Sendable {
         self.quietHoursEnabled = Self.defaults.bool(forKey: Key.quietHoursEnabled)
         self.launchAtLogin = Self.defaults.bool(forKey: Key.launchAtLogin)
         self.roomCode = Self.defaults.string(forKey: Key.roomCode) ?? ""
+        self.overlayTimeout = Self.defaults.object(forKey: Key.overlayTimeout) as? TimeInterval ?? 300
+        self.composeDraft = Self.defaults.string(forKey: Key.composeDraft) ?? ""
 
         // Quiet hours default: 10 PM to 8 AM
         let calendar = Calendar.current

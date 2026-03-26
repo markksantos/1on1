@@ -42,8 +42,10 @@ public struct MessageRecord: Codable, FetchableRecord, PersistableRecord, Sendab
 @MainActor
 public final class DatabaseManager {
     private let dbQueue: DatabaseQueue
+    private var observationCancellable: AnyDatabaseCancellable?
 
     public private(set) var messages: [Message] = []
+    public var onMessagesChanged: (([Message]) -> Void)?
 
     public init() throws {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
@@ -55,6 +57,10 @@ public final class DatabaseManager {
         try migrate()
         try loadMessages()
         startObservation()
+    }
+
+    nonisolated deinit {
+        // observationCancellable is automatically cleaned up when the DatabaseQueue is released
     }
 
     // MARK: - Public API
@@ -73,6 +79,12 @@ public final class DatabaseManager {
                 .order(Column("timestamp").asc)
                 .fetchAll(db)
                 .compactMap { $0.toMessage() }
+        }
+    }
+
+    public func deleteMessage(id: UUID) throws {
+        try dbQueue.write { db in
+            try db.execute(sql: "DELETE FROM messages WHERE id = ?", arguments: [id.uuidString])
         }
     }
 
@@ -111,11 +123,13 @@ public final class DatabaseManager {
                 .fetchAll(db)
         }
 
-        _ = observation.start(in: dbQueue, onError: { error in
+        observationCancellable = observation.start(in: dbQueue, onError: { error in
             logger.error("DB observation error: \(error.localizedDescription)")
         }, onChange: { [weak self] records in
             Task { @MainActor [weak self] in
-                self?.messages = records.compactMap { $0.toMessage() }
+                let messages = records.compactMap { $0.toMessage() }
+                self?.messages = messages
+                self?.onMessagesChanged?(messages)
             }
         })
     }

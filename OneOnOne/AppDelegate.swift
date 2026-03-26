@@ -7,21 +7,39 @@ import OneOnOneUI
 @main
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    static func main() {
+        let app = NSApplication.shared
+        app.setActivationPolicy(.accessory)
+        let delegate = AppDelegate()
+        app.delegate = delegate
+        app.run()
+    }
+
+    // MARK: - Core
+    private let appState = AppState()
     private let peerManager = PeerManager()
     private let overlayManager = OverlayStackManager()
-    private let statusBar = StatusBarController()
     private let settingsManager = SettingsManager()
-    private let cloudRelay = CloudRelayManager()
+    private var cloudRelay: CloudRelayManager?
     private let screenshotManager = ScreenshotManager()
     private var transportRouter: TransportRouter?
     private var databaseManager: DatabaseManager?
+
+    // MARK: - Controllers
+    private var statusBar: StatusBarController!
     private var conversationWindowController: ConversationWindowController?
     private var settingsWindowController: SettingsWindowController?
+
+    // MARK: - Hotkeys
     private var composeHotKey: HotKey?
     private var screenshotHotKey: HotKey?
+
+    // MARK: - State
     private var typingDebounceTask: Task<Void, Never>?
     private var quietHoursQueue: [Message] = []
     private var quietHoursCheckTask: Task<Void, Never>?
+
+    // MARK: - Lifecycle
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupDatabase()
@@ -31,13 +49,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         setupScreenshot()
         setupHotKeys()
         setupQuietHoursCheck()
+
         peerManager.start()
         activateCloudRelayIfNeeded()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        sendTypingState(false)
         peerManager.stop()
-        cloudRelay.deactivate()
+        cloudRelay?.deactivate()
         quietHoursCheckTask?.cancel()
     }
 
@@ -45,39 +65,72 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func setupDatabase() {
         do {
-            databaseManager = try DatabaseManager()
-            conversationWindowController = ConversationWindowController(databaseManager: databaseManager!)
+            let db = try DatabaseManager()
+            databaseManager = db
+
+            // Reactive sync: push DB changes to AppState
+            db.onMessagesChanged = { [weak self] messages in
+                self?.appState.messages = messages
+            }
+            // Initial load
+            appState.messages = db.messages
+
+            conversationWindowController = ConversationWindowController(
+                appState: appState,
+                onClearHistory: { [weak self] in
+                    try? self?.databaseManager?.clearHistory()
+                }
+            )
         } catch {
             print("Failed to initialize database: \(error)")
         }
     }
 
     private func setupTransportRouter() {
-        let router = TransportRouter(peerManager: peerManager, cloudRelay: cloudRelay)
+        let router = TransportRouter(peerManager: peerManager)
         router.onMessageReceived = { [weak self] message in
             self?.handleIncomingMessage(message)
         }
         transportRouter = router
 
-        // Typing state still comes directly from PeerManager
         peerManager.onTypingStateChanged = { [weak self] isTyping in
-            self?.statusBar.isPartnerTyping = isTyping
+            self?.appState.isPartnerTyping = isTyping
+            self?.statusBar.updateIcon()
+        }
+
+        peerManager.onConnectionChanged = { [weak self] status in
+            guard let self else { return }
+            self.appState.connectionStatus = status
+            self.appState.isConnected = status == .connected
+            self.appState.partnerName = self.peerManager.partnerDisplayName
+                ?? self.settingsManager.partnerName
+            self.statusBar.updateIcon()
+
+            if status == .connected {
+                self.transportRouter?.flushPendingQueue()
+            }
         }
     }
 
     private func setupStatusBar() {
+        statusBar = StatusBarController(appState: appState)
+
         let composeView = NSHostingView(
             rootView: ComposeView(
-                isConnected: peerManager.isConnected,
-                partnerName: peerManager.connectedPeer?.displayName ?? settingsManager.partnerName,
+                appState: appState,
                 onSend: { [weak self] text in
                     self?.sendTextMessage(text)
-                },
-                onDismiss: { [weak self] in
                     self?.statusBar.togglePopover()
                 },
                 onTypingChanged: { [weak self] isTyping in
                     self?.handleTypingChanged(isTyping)
+                },
+                onReconnect: { [weak self] in
+                    self?.peerManager.reconnectNow()
+                },
+                initialDraft: settingsManager.composeDraft,
+                onDraftChanged: { [weak self] text in
+                    self?.settingsManager.composeDraft = text
                 }
             )
         )
@@ -87,17 +140,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         settingsWindowController = SettingsWindowController(settings: settingsManager)
-        statusBar.onShowSettings = { [weak self] in
+        let openSettings: () -> Void = { [weak self] in
             self?.settingsWindowController?.showWindow()
         }
-
-        // Observe connection state
-        Task { @MainActor [weak self] in
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .milliseconds(500))
-                guard let self else { return }
-                self.statusBar.isConnected = self.peerManager.isConnected || self.cloudRelay.isActive
-            }
+        statusBar.onShowSettings = openSettings
+        conversationWindowController?.onOpenSettings = openSettings
+        conversationWindowController?.onDeleteMessage = { [weak self] id in
+            try? self?.databaseManager?.deleteMessage(id: id)
+        }
+        conversationWindowController?.onReconnect = { [weak self] in
+            self?.peerManager.reconnectNow()
+        }
+        conversationWindowController?.onMarkRead = { [weak self] in
+            self?.sendReadReceipt()
         }
     }
 
@@ -110,7 +165,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func setupScreenshot() {
         screenshotManager.onScreenshotCaptured = { [weak self] image in
-            guard let self, let data = image.tiffRepresentation else { return }
+            guard let self else { return }
             let hostName = Host.current().localizedName ?? "Me"
             let message = Message(
                 senderName: hostName,
@@ -120,8 +175,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             )
             self.transportRouter?.send(message)
             try? self.databaseManager?.save(message)
-            // Note: actual image transfer via MC sendResource is Phase 3.2 full implementation
-            _ = data
         }
     }
 
@@ -156,16 +209,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func activateCloudRelayIfNeeded() {
         let roomCode = settingsManager.roomCode
         guard !roomCode.isEmpty else { return }
-        Task {
-            await cloudRelay.activate(roomCode: roomCode)
-        }
+        let relay = CloudRelayManager()
+        cloudRelay = relay
+        transportRouter?.cloudRelay = relay
+        Task { await relay.activate(roomCode: roomCode) }
     }
 
     // MARK: - Messaging
 
     private func handleIncomingMessage(_ message: Message) {
+        // Handle read receipts without saving or showing
+        if message.type == .readReceipt {
+            appState.lastReadByPartner = message.timestamp
+            return
+        }
+
         try? databaseManager?.save(message)
-        statusBar.hasUnread = true
+        appState.unreadCount += 1
+        statusBar.updateIcon()
 
         if settingsManager.isInQuietHours {
             quietHoursQueue.append(message)
@@ -182,8 +243,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             type: .text,
             isFromMe: true
         )
-        transportRouter?.send(message)
+
+        appState.deliveryStatuses[message.id] = .sending
+        let sent = transportRouter?.send(message) ?? false
+        appState.deliveryStatuses[message.id] = sent ? .sent : .failed
+
         try? databaseManager?.save(message)
+    }
+
+    private func sendReadReceipt() {
+        let hostName = Host.current().localizedName ?? "Me"
+        let message = Message(
+            senderName: hostName,
+            body: "",
+            type: .readReceipt,
+            isFromMe: true
+        )
+        transportRouter?.send(message)
     }
 
     private func handleTypingChanged(_ isTyping: Bool) {
@@ -202,6 +278,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func sendTypingState(_ isTyping: Bool) {
+        guard peerManager.isConnected else { return }
         let hostName = Host.current().localizedName ?? "Me"
         let message = Message(
             senderName: hostName,

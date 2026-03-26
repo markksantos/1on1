@@ -9,49 +9,88 @@ public struct SettingsView: View {
     }
 
     public var body: some View {
+        TabView {
+            generalTab
+                .tabItem { Label("General", systemImage: "gearshape") }
+            notificationsTab
+                .tabItem { Label("Notifications", systemImage: "bell") }
+            connectionTab
+                .tabItem { Label("Connection", systemImage: "antenna.radiowaves.left.and.right") }
+        }
+        .frame(width: 420, height: 320)
+    }
+
+    // MARK: - General
+
+    private var generalTab: some View {
         Form {
-            Section("Partner") {
-                TextField("Partner Name", text: $settings.partnerName)
+            TextField("Partner Name", text: $settings.partnerName)
+                .textFieldStyle(.roundedBorder)
+
+            Picker("Overlay Size", selection: $settings.overlaySize) {
+                ForEach(OverlaySize.allCases, id: \.self) { size in
+                    Text(size.rawValue).tag(size)
+                }
             }
+            .pickerStyle(.segmented)
+
+            Toggle("Launch at Login", isOn: $settings.launchAtLogin)
+        }
+        .formStyle(.grouped)
+        .scrollDisabled(true)
+    }
+
+    // MARK: - Notifications
+
+    private var notificationsTab: some View {
+        Form {
+            Toggle("Message Sound", isOn: $settings.soundEnabled)
 
             Section("Overlay") {
-                Picker("Size", selection: $settings.overlaySize) {
-                    ForEach(OverlaySize.allCases, id: \.self) { size in
-                        Text(size.rawValue).tag(size)
-                    }
+                Picker("Auto-Dismiss After", selection: overlayTimeoutBinding) {
+                    Text("1 minute").tag(60.0 as TimeInterval)
+                    Text("5 minutes").tag(300.0 as TimeInterval)
+                    Text("10 minutes").tag(600.0 as TimeInterval)
+                    Text("30 minutes").tag(1800.0 as TimeInterval)
+                    Text("Never").tag(0.0 as TimeInterval)
                 }
-                .pickerStyle(.segmented)
-            }
-
-            Section("Sound") {
-                Toggle("Play sound on message", isOn: $settings.soundEnabled)
             }
 
             Section("Quiet Hours") {
                 Toggle("Enable Quiet Hours", isOn: $settings.quietHoursEnabled)
+
                 if settings.quietHoursEnabled {
-                    DatePicker("Start", selection: $settings.quietHoursStart, displayedComponents: .hourAndMinute)
-                    DatePicker("End", selection: $settings.quietHoursEnd, displayedComponents: .hourAndMinute)
-                    Text("Messages during quiet hours are queued and delivered when quiet hours end.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    DatePicker("From", selection: $settings.quietHoursStart, displayedComponents: .hourAndMinute)
+                    DatePicker("Until", selection: $settings.quietHoursEnd, displayedComponents: .hourAndMinute)
                 }
-            }
-
-            Section("Remote Relay") {
-                TextField("Room Code", text: $settings.roomCode)
-                    .textFieldStyle(.roundedBorder)
-                Text("Share this code with your partner to connect over the internet.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            Section("System") {
-                Toggle("Launch at Login", isOn: $settings.launchAtLogin)
             }
         }
         .formStyle(.grouped)
-        .frame(width: 400)
-        .padding()
+        .scrollDisabled(true)
+    }
+
+    private var overlayTimeoutBinding: Binding<TimeInterval> {
+        Binding(
+            get: { settings.overlayTimeout },
+            set: { settings.overlayTimeout = $0 }
+        )
+    }
+
+    // MARK: - Connection
+
+    private var connectionTab: some View {
+        Form {
+            Section {
+                TextField("Room Code", text: $settings.roomCode)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(size: 14, design: .monospaced))
+            } header: {
+                Text("CloudKit Relay")
+            } footer: {
+                Text("Enter the same code on both devices to message over the internet when not on the same network.")
+            }
+        }
+        .formStyle(.grouped)
+        .scrollDisabled(true)
     }
 }

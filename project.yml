@@ -21,13 +21,13 @@ targets:
     entitlements:
       path: OneOnOne/OneOnOne.entitlements
       properties:
-        com.apple.security.app-sandbox: true
+        com.apple.security.app-sandbox: false
         com.apple.security.network.client: true
         com.apple.security.network.server: true
-        com.apple.developer.networking.multicast: true
     info:
       path: OneOnOne/Info.plist
       properties:
+        CFBundleIconFile: AppIcon
         LSUIElement: true
         NSLocalNetworkUsageDescription: "1on1 uses your local network to discover and message your partner."
         NSBonjourServices:
@@ -35,12 +35,16 @@ targets:
           - _1on1._udp
     settings:
       base:
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: 8W75GJ2YQ3
+        CODE_SIGN_IDENTITY: "Apple Development"
         PRODUCT_BUNDLE_IDENTIFIER: com.markstudios.OneOnOne
         MARKETING_VERSION: "1.0.0"
         CURRENT_PROJECT_VERSION: "1"
         SWIFT_VERSION: "6.0"
         MACOSX_DEPLOYMENT_TARGET: "14.0"
         GENERATE_INFOPLIST_FILE: false
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     dependencies:
       - package: OneOnOneKit
         product: OneOnOneEngine

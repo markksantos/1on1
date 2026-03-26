@@ -10,13 +10,13 @@ final class MessageOverlayPanel: NSPanel {
         )
 
         level = .floating
-        collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
         isOpaque = false
         backgroundColor = .clear
-        hasShadow = true
+        hasShadow = false  // SwiftUI view handles shadow
         titlebarAppearsTransparent = true
         titleVisibility = .hidden
-        isMovableByWindowBackground = false
+        isMovableByWindowBackground = true
         isReleasedWhenClosed = false
         animationBehavior = .utilityWindow
     }
@@ -24,14 +24,24 @@ final class MessageOverlayPanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
 
+    func fadeIn() {
+        alphaValue = 0
+        orderFrontRegardless()
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.15
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            animator().alphaValue = 1
+        }
+    }
+
     func fadeOut(completion: @escaping () -> Void) {
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.3
-            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-            self.animator().alphaValue = 0
-        } completionHandler: {
-            self.orderOut(nil)
-            self.alphaValue = 1
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.2
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeIn)
+            animator().alphaValue = 0
+        } completionHandler: { [weak self] in
+            self?.orderOut(nil)
+            self?.alphaValue = 1
             completion()
         }
     }

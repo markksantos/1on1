@@ -1,42 +1,61 @@
 import AppKit
 import SwiftUI
-import OneOnOneUI
+import OneOnOneEngine
 
 @MainActor
-final class StatusBarController {
+final class StatusBarController: NSObject {
     private var statusItem: NSStatusItem!
     private var popover: NSPopover!
 
     var onShowHistory: (() -> Void)?
     var onShowSettings: (() -> Void)?
 
-    var isConnected: Bool = false {
-        didSet { updateIcon() }
-    }
+    private let appState: AppState
 
-    var hasUnread: Bool = false {
-        didSet { updateIcon() }
-    }
-
-    var isPartnerTyping: Bool = false {
-        didSet { updateIcon() }
+    init(appState: AppState) {
+        self.appState = appState
+        super.init()
     }
 
     func setup(composeView: NSView) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
 
         if let button = statusItem.button {
-            button.image = NSImage(systemSymbolName: "bubble.left.and.bubble.right.fill", accessibilityDescription: "1on1")
+            setTemplateImage("bubble.left.and.bubble.right", on: button)
             button.action = #selector(handleClick(_:))
             button.target = self
             button.sendAction(on: [.leftMouseUp, .rightMouseUp])
         }
 
         popover = NSPopover()
-        popover.contentSize = NSSize(width: 320, height: 100)
-        popover.behavior = .transient
+        popover.contentSize = NSSize(width: 300, height: 120)
+        popover.behavior = .semitransient
+        popover.animates = true
         popover.contentViewController = NSViewController()
         popover.contentViewController?.view = composeView
+    }
+
+    func updateIcon() {
+        guard let button = statusItem?.button else { return }
+
+        // Use distinct symbols for each state — template images adapt to menu bar appearance
+        let symbolName: String
+        if appState.isPartnerTyping {
+            symbolName = "ellipsis.bubble"
+        } else if appState.unreadCount > 0 {
+            symbolName = "exclamationmark.bubble"
+        } else {
+            switch appState.connectionStatus {
+            case .connected:
+                symbolName = "bubble.left.and.bubble.right.fill"
+            case .connecting, .reconnecting:
+                symbolName = "bubble.left.and.bubble.right"
+            case .offline:
+                symbolName = "bubble.left.and.bubble.right"
+            }
+        }
+
+        setTemplateImage(symbolName, on: button)
     }
 
     @objc func togglePopover() {
@@ -44,10 +63,19 @@ final class StatusBarController {
         if popover.isShown {
             popover.performClose(nil)
         } else {
-            hasUnread = false
+            appState.unreadCount = 0
+            updateIcon()
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
             popover.contentViewController?.view.window?.makeKey()
         }
+    }
+
+    // MARK: - Private
+
+    private func setTemplateImage(_ symbolName: String, on button: NSStatusBarButton) {
+        let image = NSImage(systemSymbolName: symbolName, accessibilityDescription: "1on1")
+        image?.isTemplate = true
+        button.image = image
     }
 
     @objc private func handleClick(_ sender: NSStatusBarButton) {
@@ -55,7 +83,6 @@ final class StatusBarController {
             togglePopover()
             return
         }
-
         if event.type == .rightMouseUp {
             showContextMenu()
         } else {
@@ -63,49 +90,38 @@ final class StatusBarController {
         }
     }
 
-    @objc private func showHistory() {
-        onShowHistory?()
-    }
-
-    @objc private func showSettings() {
-        onShowSettings?()
-    }
+    @objc private func showHistory() { onShowHistory?() }
+    @objc private func showSettings() { onShowSettings?() }
 
     private func showContextMenu() {
         let menu = NSMenu()
-        menu.addItem(NSMenuItem(title: "View History", action: #selector(showHistory), keyEquivalent: ""))
-        menu.addItem(NSMenuItem(title: "Settings…", action: #selector(showSettings), keyEquivalent: ","))
-        menu.items.forEach { $0.target = self }
+
+        let historyItem = NSMenuItem(title: "Message History", action: #selector(showHistory), keyEquivalent: "h")
+        historyItem.target = self
+        menu.addItem(historyItem)
+
+        let settingsItem = NSMenuItem(title: "Settings…", action: #selector(showSettings), keyEquivalent: ",")
+        settingsItem.target = self
+        menu.addItem(settingsItem)
+
+        menu.addItem(.separator())
+
+        let statusText: String
+        switch appState.connectionStatus {
+        case .connected: statusText = "Connected to \(appState.partnerName)"
+        case .connecting: statusText = "Connecting…"
+        case .reconnecting: statusText = "Reconnecting…"
+        case .offline: statusText = "Offline"
+        }
+        let statusItem = NSMenuItem(title: statusText, action: nil, keyEquivalent: "")
+        statusItem.isEnabled = false
+        menu.addItem(statusItem)
+
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Quit 1on1", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
 
-        statusItem.menu = menu
-        statusItem.button?.performClick(nil)
-        statusItem.menu = nil
-    }
-
-    private func updateIcon() {
-        guard let button = statusItem?.button else { return }
-        let symbolName: String
-        if isPartnerTyping {
-            symbolName = "ellipsis.bubble.fill"
-        } else if hasUnread {
-            symbolName = "bubble.left.and.exclamationmark.bubble.right.fill"
-        } else if isConnected {
-            symbolName = "bubble.left.and.bubble.right.fill"
-        } else {
-            symbolName = "bubble.left.and.bubble.right"
-        }
-        button.image = NSImage(systemSymbolName: symbolName, accessibilityDescription: "1on1")
-
-        if isPartnerTyping {
-            button.contentTintColor = .systemOrange
-        } else if hasUnread {
-            button.contentTintColor = .systemBlue
-        } else if isConnected {
-            button.contentTintColor = .systemGreen
-        } else {
-            button.contentTintColor = .secondaryLabelColor
-        }
+        self.statusItem.menu = menu
+        self.statusItem.button?.performClick(nil)
+        self.statusItem.menu = nil
     }
 }

@@ -8,8 +8,8 @@ private let logger = Logger(subsystem: "com.markstudios.OneOnOne", category: "Cl
 @Observable
 @MainActor
 public final class CloudRelayManager {
-    private let container = CKContainer.default()
-    private var database: CKDatabase { container.privateCloudDatabase }
+    private var container: CKContainer?
+    private var database: CKDatabase? { container?.privateCloudDatabase }
     private var zoneID: CKRecordZone.ID?
     private var pollTask: Task<Void, Never>?
     private var seenMessageIDs: Set<String> = []
@@ -25,6 +25,16 @@ public final class CloudRelayManager {
     public func activate(roomCode: String) async {
         guard !roomCode.isEmpty else { return }
 
+        // Lazily initialize CKContainer only when needed
+        do {
+            container = CKContainer.default()
+        }
+
+        guard let database else {
+            logger.error("CloudKit container not available — is iCloud configured?")
+            return
+        }
+
         // Derive encryption key from room code via HKDF
         let codeData = Data(roomCode.utf8)
         let salt = Data("com.markstudios.1on1.relay".utf8)
@@ -38,7 +48,6 @@ public final class CloudRelayManager {
         let zoneName = "Room-\(roomCode)"
         zoneID = CKRecordZone.ID(zoneName: zoneName, ownerName: CKCurrentUserDefaultName)
 
-        // Create zone if needed
         let zone = CKRecordZone(zoneID: zoneID!)
         do {
             try await database.save(zone)
@@ -54,13 +63,14 @@ public final class CloudRelayManager {
     public func deactivate() {
         pollTask?.cancel()
         isActive = false
+        container = nil
         zoneID = nil
         derivedKey = nil
         seenMessageIDs.removeAll()
     }
 
     public func send(_ message: Message) async {
-        guard let zoneID, let derivedKey else { return }
+        guard let database, let zoneID, let derivedKey else { return }
 
         do {
             let data = try message.encoded()
@@ -93,9 +103,9 @@ public final class CloudRelayManager {
     }
 
     private func fetchNewMessages() async {
-        guard let zoneID, let derivedKey else { return }
+        guard let database, let zoneID, let derivedKey else { return }
 
-        let cutoff = Date(timeIntervalSinceNow: -3600) // last hour
+        let cutoff = Date(timeIntervalSinceNow: -3600)
         let predicate = NSPredicate(format: "timestamp > %@", cutoff as NSDate)
         let query = CKQuery(recordType: "Message", predicate: predicate)
         query.sortDescriptors = [NSSortDescriptor(key: "timestamp", ascending: true)]

@@ -9,6 +9,7 @@ public struct MessageOverlayView: View {
     @State private var replyText = ""
     @State private var isReplying = false
     @State private var appeared = false
+    @FocusState private var isReplyFocused: Bool
 
     public init(
         message: Message,
@@ -22,86 +23,129 @@ public struct MessageOverlayView: View {
 
     public var body: some View {
         VStack(spacing: 16) {
-            // Header
-            HStack {
-                // Sender avatar
-                Circle()
-                    .fill(Color.blue.gradient)
-                    .frame(width: 44, height: 44)
-                    .overlay {
-                        Text(String(message.senderName.prefix(1)).uppercased())
-                            .font(.system(size: 20, weight: .bold))
-                            .foregroundStyle(.white)
-                    }
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(message.senderName)
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(.white.opacity(0.8))
-                    Text(message.timestamp, style: .relative)
-                        .font(.system(size: 12))
-                        .foregroundStyle(.white.opacity(0.5))
-                }
-
-                Spacer()
-
-                Button(action: onDismiss) {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 24))
-                        .foregroundStyle(.white.opacity(0.6))
-                }
-                .buttonStyle(.plain)
-            }
-
-            // Message body
-            Text(message.body)
-                .font(.system(size: 28, weight: .bold))
-                .foregroundStyle(.white)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 8)
-
-            // Reply area
-            if isReplying {
-                HStack(spacing: 8) {
-                    TextField("Reply…", text: $replyText)
-                        .textFieldStyle(.plain)
-                        .font(.system(size: 15))
-                        .foregroundStyle(.white)
-                        .onSubmit(sendReply)
-
-                    Button("Send", action: sendReply)
-                        .buttonStyle(.plain)
-                        .foregroundStyle(.blue)
-                        .disabled(replyText.isEmpty)
-                }
-                .padding(10)
-                .background(.white.opacity(0.15), in: RoundedRectangle(cornerRadius: 8))
-            } else if onReply != nil {
-                Button {
-                    isReplying = true
-                } label: {
-                    Label("Reply", systemImage: "arrowshape.turn.up.left.fill")
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.8))
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 8)
-                        .background(.white.opacity(0.15), in: Capsule())
-                }
-                .buttonStyle(.plain)
-            }
+            header
+            messageBody
+            replyArea
         }
         .padding(24)
-        .frame(width: 440)
-        .background(.ultraThinMaterial.opacity(0.9), in: RoundedRectangle(cornerRadius: 20))
-        .background(Color.black.opacity(0.5), in: RoundedRectangle(cornerRadius: 20))
-        .shadow(color: .black.opacity(0.4), radius: 30, y: 10)
-        .scaleEffect(appeared ? 1.0 : 0.9)
+        .frame(width: 420)
+        .background {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(.ultraThickMaterial)
+                .shadow(color: .black.opacity(0.25), radius: 40, y: 8)
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(.white.opacity(0.1), lineWidth: 0.5)
+        }
+        .scaleEffect(appeared ? 1.0 : 0.92)
         .opacity(appeared ? 1.0 : 0)
         .onAppear {
-            withAnimation(.spring(duration: 0.4, bounce: 0.3)) {
+            withAnimation(.spring(duration: 0.45, bounce: 0.25)) {
                 appeared = true
             }
+        }
+        .onKeyPress(.escape) {
+            if isReplying {
+                isReplying = false
+                return .handled
+            }
+            onDismiss()
+            return .handled
+        }
+        .contextMenu {
+            Button("Copy Message") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(message.body, forType: .string)
+            }
+            Divider()
+            Button("Dismiss", action: onDismiss)
+        }
+    }
+
+    // MARK: - Subviews
+
+    private var header: some View {
+        HStack(spacing: 12) {
+            // Avatar
+            ZStack {
+                Circle()
+                    .fill(.blue.gradient)
+                    .frame(width: 40, height: 40)
+                Text(String(message.senderName.prefix(1)).uppercased())
+                    .font(.system(size: 17, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white)
+            }
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(message.senderName)
+                    .font(.system(size: 13, weight: .semibold))
+                Text(message.timestamp, style: .relative)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+
+            Button(action: onDismiss) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 24, height: 24)
+                    .background(.quaternary, in: Circle())
+            }
+            .buttonStyle(.plain)
+            .keyboardShortcut(.escape, modifiers: [])
+        }
+    }
+
+    private var messageBody: some View {
+        Text(linkAttributedString(from: message.body))
+            .font(.system(size: 22, weight: .medium))
+            .multilineTextAlignment(.leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 4)
+            .textSelection(.enabled)
+    }
+
+    @ViewBuilder
+    private var replyArea: some View {
+        if isReplying {
+            HStack(spacing: 8) {
+                TextField("Reply…", text: $replyText)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 14))
+                    .focused($isReplyFocused)
+                    .onSubmit(sendReply)
+
+                Button(action: sendReply) {
+                    Image(systemName: "arrow.up.circle.fill")
+                        .font(.system(size: 22))
+                        .symbolRenderingMode(.hierarchical)
+                        .foregroundStyle(replyText.isEmpty ? Color.secondary : Color.blue)
+                }
+                .buttonStyle(.plain)
+                .disabled(replyText.isEmpty)
+            }
+            .padding(10)
+            .background(.quinary, in: RoundedRectangle(cornerRadius: 8))
+            .onAppear { isReplyFocused = true }
+            .transition(.opacity.combined(with: .move(edge: .bottom)))
+        } else if onReply != nil {
+            Button {
+                withAnimation(.easeOut(duration: 0.2)) {
+                    isReplying = true
+                }
+            } label: {
+                Label("Reply", systemImage: "arrowshape.turn.up.left")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 6)
+                    .background(.quinary, in: Capsule())
+            }
+            .buttonStyle(.plain)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 

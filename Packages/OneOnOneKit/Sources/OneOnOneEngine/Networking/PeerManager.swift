@@ -12,31 +12,37 @@ public final class PeerManager: NSObject, @unchecked Sendable {
     private static let peerIDKey = "com.markstudios.1on1.peerID"
     private static let partnerNameKey = "com.markstudios.1on1.partnerName"
     private static let maxBackoff: TimeInterval = 30
+    private static let typingTimeout: TimeInterval = 8
 
     // MARK: - Published State
     public private(set) var connectedPeer: Peer?
     public private(set) var isConnected = false
+    public private(set) var connectionStatus: ConnectionStatus = .offline
 
     // MARK: - Callbacks
     public var onMessageReceived: (@MainActor (Message) -> Void)?
     public var onTypingStateChanged: (@MainActor (Bool) -> Void)?
+    public var onConnectionChanged: (@MainActor (ConnectionStatus) -> Void)?
 
     // MARK: - Private
     private let myPeerID: MCPeerID
-    // MCSession is thread-safe; stored nonisolated for delegate access
     nonisolated(unsafe) private let _session: MCSession
     private var advertiser: MCNearbyServiceAdvertiser?
     private var browser: MCNearbyServiceBrowser?
     private var reconnectBackoff: TimeInterval = 2
     private var reconnectTask: Task<Void, Never>?
+    private var typingTimeoutTask: Task<Void, Never>?
     private var storedPartnerName: String? {
         get { UserDefaults.standard.string(forKey: Self.partnerNameKey) }
         set { UserDefaults.standard.set(newValue, forKey: Self.partnerNameKey) }
     }
 
+    public var partnerDisplayName: String? {
+        connectedPeer?.displayName ?? storedPartnerName
+    }
+
     // MARK: - Init
     public override init() {
-        // Restore or create persistent peer ID
         if let data = UserDefaults.standard.data(forKey: Self.peerIDKey),
            let archived = try? NSKeyedUnarchiver.unarchivedObject(ofClass: MCPeerID.self, from: data) {
             myPeerID = archived
@@ -66,8 +72,17 @@ public final class PeerManager: NSObject, @unchecked Sendable {
         browser?.stopBrowsingForPeers()
         _session.disconnect()
         reconnectTask?.cancel()
+        typingTimeoutTask?.cancel()
         isConnected = false
+        connectionStatus = .offline
         connectedPeer = nil
+    }
+
+    public func reconnectNow() {
+        reconnectTask?.cancel()
+        resetBackoff()
+        stop()
+        start()
     }
 
     public func send(_ message: Message) {
@@ -101,6 +116,8 @@ public final class PeerManager: NSObject, @unchecked Sendable {
 
     private func scheduleReconnect() {
         reconnectTask?.cancel()
+        connectionStatus = .reconnecting
+        onConnectionChanged?(.reconnecting)
         let delay = reconnectBackoff
         reconnectBackoff = min(reconnectBackoff * 2, Self.maxBackoff)
 
@@ -115,6 +132,15 @@ public final class PeerManager: NSObject, @unchecked Sendable {
     private func resetBackoff() {
         reconnectBackoff = 2
     }
+
+    private func startTypingTimeout() {
+        typingTimeoutTask?.cancel()
+        typingTimeoutTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(Self.typingTimeout))
+            guard !Task.isCancelled else { return }
+            self?.onTypingStateChanged?(false)
+        }
+    }
 }
 
 // MARK: - MCSessionDelegate
@@ -127,13 +153,17 @@ extension PeerManager: MCSessionDelegate {
             case .connected:
                 logger.info("Connected to \(name)")
                 self.isConnected = true
+                self.connectionStatus = .connected
                 self.connectedPeer = Peer(id: name, displayName: name, connectionState: .connected)
                 self.storedPartnerName = name
                 self.resetBackoff()
+                self.onConnectionChanged?(.connected)
 
             case .connecting:
                 logger.info("Connecting to \(name)")
+                self.connectionStatus = .connecting
                 self.connectedPeer = Peer(id: name, displayName: name, connectionState: .connecting)
+                self.onConnectionChanged?(.connecting)
 
             case .notConnected:
                 logger.info("Disconnected from \(name)")
@@ -157,9 +187,13 @@ extension PeerManager: MCSessionDelegate {
             switch message.type {
             case .typingStarted:
                 self.onTypingStateChanged?(true)
+                self.startTypingTimeout()
             case .typingStopped:
+                self.typingTimeoutTask?.cancel()
                 self.onTypingStateChanged?(false)
             case .text, .readReceipt:
+                self.typingTimeoutTask?.cancel()
+                self.onTypingStateChanged?(false)
                 self.onMessageReceived?(message)
             }
         }
