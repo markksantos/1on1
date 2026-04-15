@@ -21,3 +21,9 @@ Package.resolved
 
 # Build artifacts
 build/
+
+
+# Environment
+.env
+.env.local
+.env.*.local
