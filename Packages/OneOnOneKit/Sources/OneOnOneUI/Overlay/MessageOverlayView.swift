@@ -5,6 +5,7 @@ import OneOnOneEngine
 public struct MessageOverlayView: View {
     let message: Message
     let panelWidth: CGFloat
+    let textSize: CGFloat
     let onReply: ((String) -> Void)?
     let onDismiss: () -> Void
 
@@ -16,11 +17,13 @@ public struct MessageOverlayView: View {
     public init(
         message: Message,
         panelWidth: CGFloat = 420,
+        textSize: CGFloat = 22,
         onReply: ((String) -> Void)?,
         onDismiss: @escaping () -> Void
     ) {
         self.message = message
         self.panelWidth = panelWidth
+        self.textSize = textSize
         self.onReply = onReply
         self.onDismiss = onDismiss
     }
@@ -116,7 +119,7 @@ public struct MessageOverlayView: View {
             }
 
             Text(linkAttributedString(from: message.body))
-                .font(.system(size: message.type == .screenshot ? 16 : 22, weight: .medium))
+                .font(.system(size: message.type == .screenshot ? screenshotCaptionSize : textSize, weight: .medium))
                 .multilineTextAlignment(.leading)
                 .textSelection(.enabled)
         }
@@ -178,6 +181,12 @@ public struct MessageOverlayView: View {
         guard message.type == .screenshot,
               let attachmentData = message.attachmentData else { return nil }
         return NSImage(data: attachmentData)
+    }
+
+    /// The "Screenshot" caption sits below the image, so it stays smaller than a
+    /// plain text message but still tracks the chosen overlay size.
+    private var screenshotCaptionSize: CGFloat {
+        max(13, textSize * 0.7)
     }
 
     private var screenshotThumbnailWidth: CGFloat {

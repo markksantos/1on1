@@ -17,6 +17,10 @@ final class OverlayStackManager {
         settings?.overlaySize.panelWidth ?? 420
     }
 
+    private var overlayTextSize: CGFloat {
+        settings?.overlaySize.textSize ?? 22
+    }
+
     func showMessage(_ message: Message) {
         if settings?.soundEnabled != false {
             playSound()
@@ -28,6 +32,7 @@ final class OverlayStackManager {
             rootView: MessageOverlayView(
                 message: message,
                 panelWidth: overlayWidth,
+                textSize: overlayTextSize,
                 onReply: { [weak self] text in
                     self?.onReply?(text)
                 },
