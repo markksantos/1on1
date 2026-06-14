@@ -25,7 +25,7 @@ struct MessageTests {
 
     @Test("All message types encode correctly")
     func allMessageTypes() throws {
-        let types: [MessageType] = [.text, .typingStarted, .typingStopped, .readReceipt]
+        let types: [MessageType] = [.text, .screenshot, .typingStarted, .typingStopped, .readReceipt]
 
         for type in types {
             let msg = Message(senderName: "Test", body: "", type: type, isFromMe: false)
@@ -49,5 +49,44 @@ struct MessageTests {
         let decoded = try Message.decoded(from: data)
         #expect(decoded.body.isEmpty)
         #expect(decoded.type == .typingStarted)
+    }
+
+    @Test("Received remote copy preserves payload but flips ownership")
+    func receivedRemoteCopy() {
+        let original = Message(
+            senderName: "Alice",
+            body: "From another device",
+            type: .text,
+            isFromMe: true
+        )
+
+        let received = original.receivedFromRemote()
+
+        #expect(received.id == original.id)
+        #expect(received.senderName == original.senderName)
+        #expect(received.body == original.body)
+        #expect(received.type == original.type)
+        #expect(received.timestamp == original.timestamp)
+        #expect(received.isFromMe == false)
+    }
+
+    @Test("Screenshot payload roundtrip")
+    func screenshotPayloadRoundtrip() throws {
+        let payload = Data([0, 1, 2, 3, 4, 5])
+        let original = Message(
+            senderName: "Alice",
+            body: "Screenshot",
+            type: .screenshot,
+            isFromMe: true,
+            attachmentData: payload,
+            attachmentMimeType: "image/jpeg"
+        )
+
+        let data = try original.encoded()
+        let decoded = try Message.decoded(from: data)
+
+        #expect(decoded.type == .screenshot)
+        #expect(decoded.attachmentData == payload)
+        #expect(decoded.attachmentMimeType == "image/jpeg")
     }
 }

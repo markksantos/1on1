@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import OneOnOneEngine
 
@@ -6,6 +7,7 @@ public struct ConversationView: View {
     let onClearHistory: () -> Void
     let onOpenSettings: () -> Void
     let onDeleteMessage: ((UUID) -> Void)?
+    let onResendMessage: ((UUID) -> Void)?
     let onReconnect: (() -> Void)?
     let onMarkRead: (() -> Void)?
 
@@ -16,6 +18,7 @@ public struct ConversationView: View {
         onClearHistory: @escaping () -> Void,
         onOpenSettings: @escaping () -> Void,
         onDeleteMessage: ((UUID) -> Void)? = nil,
+        onResendMessage: ((UUID) -> Void)? = nil,
         onReconnect: (() -> Void)? = nil,
         onMarkRead: (() -> Void)? = nil
     ) {
@@ -23,6 +26,7 @@ public struct ConversationView: View {
         self.onClearHistory = onClearHistory
         self.onOpenSettings = onOpenSettings
         self.onDeleteMessage = onDeleteMessage
+        self.onResendMessage = onResendMessage
         self.onReconnect = onReconnect
         self.onMarkRead = onMarkRead
     }
@@ -87,8 +91,8 @@ public struct ConversationView: View {
     private var statusDotColor: Color {
         switch appState.connectionStatus {
         case .connected: .green
-        case .connecting, .reconnecting: .orange
-        case .offline: .secondary
+        case .connecting, .reconnecting: appState.isRelayActive ? .blue : .orange
+        case .offline: appState.isRelayActive ? .blue : .secondary
         }
     }
 
@@ -97,8 +101,8 @@ public struct ConversationView: View {
         switch appState.connectionStatus {
         case .connected: return "Connected · \(count)"
         case .connecting: return "Connecting… · \(count)"
-        case .reconnecting: return "Reconnecting… · \(count)"
-        case .offline: return "Offline · \(count)"
+        case .reconnecting: return "\(appState.isRelayActive ? "Relay Ready" : "Reconnecting…") · \(count)"
+        case .offline: return "\(appState.isRelayActive ? "Relay Ready" : "Offline") · \(count)"
         }
     }
 
@@ -134,7 +138,8 @@ public struct ConversationView: View {
                                     message: message,
                                     deliveryStatus: appState.deliveryStatuses[message.id],
                                     lastReadByPartner: appState.lastReadByPartner,
-                                    onDelete: onDeleteMessage
+                                    onDelete: onDeleteMessage,
+                                    onResend: onResendMessage
                                 )
                                 .id(message.id)
                             }
@@ -206,31 +211,14 @@ private struct MessageRow: View {
     let deliveryStatus: DeliveryStatus?
     let lastReadByPartner: Date?
     let onDelete: ((UUID) -> Void)?
+    let onResend: ((UUID) -> Void)?
 
     var body: some View {
         HStack(alignment: .bottom, spacing: 8) {
             if message.isFromMe { Spacer(minLength: 80) }
 
             VStack(alignment: message.isFromMe ? .trailing : .leading, spacing: 2) {
-                Text(linkAttributedString(from: message.body, isFromMe: message.isFromMe))
-                    .font(.system(size: 13))
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 7)
-                    .background(bubbleColor, in: bubbleShape)
-                    .foregroundStyle(message.isFromMe ? .white : .primary)
-                    .textSelection(.enabled)
-                    .contextMenu {
-                        Button("Copy") {
-                            NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString(message.body, forType: .string)
-                        }
-                        if onDelete != nil {
-                            Divider()
-                            Button("Delete", role: .destructive) {
-                                onDelete?(message.id)
-                            }
-                        }
-                    }
+                messageBubble
 
                 HStack(spacing: 4) {
                     Text(message.timestamp, style: .time)
@@ -248,6 +236,60 @@ private struct MessageRow: View {
         .padding(.vertical, 1)
     }
 
+    private var canResend: Bool {
+        guard message.isFromMe, onResend != nil else { return false }
+        switch deliveryStatus {
+        case .failed, .queued: return true
+        default: return false
+        }
+    }
+
+    @ViewBuilder
+    private var messageBubble: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if let image = screenshotImage {
+                Image(nsImage: image)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 240, height: 150)
+                    .background(.black.opacity(0.08))
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .accessibilityLabel("Screenshot")
+            }
+
+            Text(linkAttributedString(from: message.body, isFromMe: message.isFromMe))
+                .font(.system(size: 13))
+                .textSelection(.enabled)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
+        .background(bubbleColor, in: bubbleShape)
+        .foregroundStyle(message.isFromMe ? .white : .primary)
+        .contextMenu {
+            Button("Copy") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(message.body, forType: .string)
+            }
+            if canResend {
+                Button("Resend") {
+                    onResend?(message.id)
+                }
+            }
+            if onDelete != nil {
+                Divider()
+                Button("Delete", role: .destructive) {
+                    onDelete?(message.id)
+                }
+            }
+        }
+    }
+
+    private var screenshotImage: NSImage? {
+        guard message.type == .screenshot,
+              let attachmentData = message.attachmentData else { return nil }
+        return NSImage(data: attachmentData)
+    }
+
     @ViewBuilder
     private var deliveryIndicator: some View {
         if let lastRead = lastReadByPartner, message.timestamp <= lastRead {
@@ -256,6 +298,8 @@ private struct MessageRow: View {
                 .foregroundStyle(.blue.opacity(0.7))
         } else if let status = deliveryStatus {
             switch status {
+            case .queued:
+                resendableLabel("Queued · Retry", color: .orange)
             case .sending:
                 Image(systemName: "circle.dotted")
                     .font(.system(size: 9))
@@ -265,10 +309,25 @@ private struct MessageRow: View {
                     .font(.system(size: 9))
                     .foregroundStyle(.quaternary)
             case .failed:
-                Text("Failed")
-                    .font(.system(size: 9))
-                    .foregroundStyle(.red)
+                resendableLabel("Failed · Retry", color: .red)
             }
+        }
+    }
+
+    @ViewBuilder
+    private func resendableLabel(_ text: String, color: Color) -> some View {
+        if canResend {
+            Button(action: { onResend?(message.id) }) {
+                Text(text)
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundStyle(color)
+            }
+            .buttonStyle(.plain)
+            .help("Click to resend this message")
+        } else {
+            Text(text.replacingOccurrences(of: " · Retry", with: ""))
+                .font(.system(size: 9))
+                .foregroundStyle(color)
         }
     }
 

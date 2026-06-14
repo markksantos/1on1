@@ -1,5 +1,6 @@
 import AppKit
 
+@MainActor
 final class MessageOverlayPanel: NSPanel {
     init(contentRect: NSRect) {
         super.init(
@@ -34,15 +35,17 @@ final class MessageOverlayPanel: NSPanel {
         }
     }
 
-    func fadeOut(completion: @escaping () -> Void) {
+    func fadeOut(completion: @escaping @MainActor @Sendable () -> Void) {
         NSAnimationContext.runAnimationGroup { ctx in
             ctx.duration = 0.2
             ctx.timingFunction = CAMediaTimingFunction(name: .easeIn)
             animator().alphaValue = 0
-        } completionHandler: { [weak self] in
-            self?.orderOut(nil)
-            self?.alphaValue = 1
-            completion()
+        } completionHandler: { [weak self, completion] in
+            Task { @MainActor in
+                self?.orderOut(nil)
+                self?.alphaValue = 1
+                completion()
+            }
         }
     }
 }

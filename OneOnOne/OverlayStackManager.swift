@@ -5,7 +5,7 @@ import OneOnOneUI
 
 @MainActor
 final class OverlayStackManager {
-    private var activePanels: [(panel: MessageOverlayPanel, message: Message)] = []
+    private var activePanels: [(panel: MessageOverlayPanel, message: Message, height: CGFloat)] = []
     private var pulseTimers: [UUID: Timer] = [:]
     private var autoDismissTimers: [UUID: Timer] = [:]
     private let overlaySpacing: CGFloat = 12
@@ -17,8 +17,6 @@ final class OverlayStackManager {
         settings?.overlaySize.panelWidth ?? 420
     }
 
-    private var overlayHeight: CGFloat { 220 }
-
     func showMessage(_ message: Message) {
         if settings?.soundEnabled != false {
             playSound()
@@ -26,13 +24,10 @@ final class OverlayStackManager {
 
         guard let screen = NSScreen.main else { return }
 
-        let panel = MessageOverlayPanel(
-            contentRect: NSRect(x: 0, y: 0, width: overlayWidth, height: overlayHeight)
-        )
-
         let hostingView = NSHostingView(
             rootView: MessageOverlayView(
                 message: message,
+                panelWidth: overlayWidth,
                 onReply: { [weak self] text in
                     self?.onReply?(text)
                 },
@@ -42,18 +37,29 @@ final class OverlayStackManager {
             )
         )
         hostingView.layer?.backgroundColor = .clear
+
+        // The SwiftUI content is width-pinned to overlayWidth but its height is
+        // dynamic (message length, screenshot, expanded reply field). Measure the
+        // actual fitting height instead of guessing — a hardcoded height clips
+        // long messages or leaves a tall empty panel for short ones.
+        let fittingHeight = hostingView.fittingSize.height
+        let panelHeight = fittingHeight > 0 ? fittingHeight : overlayHeight(for: message)
+
+        let panel = MessageOverlayPanel(
+            contentRect: NSRect(x: 0, y: 0, width: overlayWidth, height: panelHeight)
+        )
         panel.contentView = hostingView
 
         // Position: center horizontally, upper-center vertically
         let screenFrame = screen.visibleFrame
         let x = screenFrame.midX - overlayWidth / 2
-        let baseY = screenFrame.maxY - overlayHeight - 80
+        let baseY = screenFrame.maxY - panelHeight - 80
 
         // Shift existing panels down
-        shiftExistingPanels()
+        shiftExistingPanels(downBy: panelHeight + overlaySpacing)
 
         panel.setFrameOrigin(NSPoint(x: x, y: baseY))
-        activePanels.insert((panel: panel, message: message), at: 0)
+        activePanels.insert((panel: panel, message: message, height: panelHeight), at: 0)
         panel.fadeIn()
 
         startPulseTimer(for: message.id, panel: panel)
@@ -87,15 +93,17 @@ final class OverlayStackManager {
 
     // MARK: - Layout
 
-    private func shiftExistingPanels() {
-        guard let screen = NSScreen.main else { return }
-        let screenFrame = screen.visibleFrame
-        let baseY = screenFrame.maxY - overlayHeight - 80
+    private func overlayHeight(for message: Message) -> CGFloat {
+        if message.type == .screenshot, message.attachmentData != nil {
+            return 400
+        }
+        return 220
+    }
 
-        for (i, entry) in activePanels.enumerated() {
-            let y = baseY - CGFloat(i + 1) * (overlayHeight + overlaySpacing)
+    private func shiftExistingPanels(downBy offset: CGFloat) {
+        for entry in activePanels {
             var frame = entry.panel.frame
-            frame.origin.y = y
+            frame.origin.y -= offset
             NSAnimationContext.runAnimationGroup { ctx in
                 ctx.duration = 0.25
                 ctx.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
@@ -107,10 +115,10 @@ final class OverlayStackManager {
     private func relayoutPanels() {
         guard let screen = NSScreen.main else { return }
         let screenFrame = screen.visibleFrame
-        let baseY = screenFrame.maxY - overlayHeight - 80
+        var nextTopY = screenFrame.maxY - 80
 
-        for (i, entry) in activePanels.enumerated() {
-            let y = baseY - CGFloat(i) * (overlayHeight + overlaySpacing)
+        for entry in activePanels {
+            let y = nextTopY - entry.height
             var frame = entry.panel.frame
             frame.origin.y = y
             NSAnimationContext.runAnimationGroup { ctx in
@@ -118,6 +126,7 @@ final class OverlayStackManager {
                 ctx.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
                 entry.panel.animator().setFrame(frame, display: true)
             }
+            nextTopY = y - overlaySpacing
         }
     }
 
@@ -125,14 +134,19 @@ final class OverlayStackManager {
 
     private func startPulseTimer(for messageID: UUID, panel: MessageOverlayPanel) {
         let timer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak panel] _ in
-            guard let panel else { return }
-            NSAnimationContext.runAnimationGroup { ctx in
-                ctx.duration = 0.12
-                panel.animator().alphaValue = 0.6
-            } completionHandler: {
+            Task { @MainActor [weak panel] in
+                guard let panel else { return }
                 NSAnimationContext.runAnimationGroup { ctx in
                     ctx.duration = 0.12
-                    panel.animator().alphaValue = 1.0
+                    panel.animator().alphaValue = 0.6
+                } completionHandler: {
+                    Task { @MainActor [weak panel] in
+                        guard let panel else { return }
+                        NSAnimationContext.runAnimationGroup { ctx in
+                            ctx.duration = 0.12
+                            panel.animator().alphaValue = 1.0
+                        }
+                    }
                 }
             }
         }

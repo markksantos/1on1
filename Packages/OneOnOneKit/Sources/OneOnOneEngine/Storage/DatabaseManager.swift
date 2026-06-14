@@ -14,6 +14,8 @@ public struct MessageRecord: Codable, FetchableRecord, PersistableRecord, Sendab
     public let type: String
     public let timestamp: Date
     public let isFromMe: Bool
+    public let attachmentData: Data?
+    public let attachmentMimeType: String?
 
     public init(from message: Message) {
         self.id = message.id.uuidString
@@ -22,6 +24,8 @@ public struct MessageRecord: Codable, FetchableRecord, PersistableRecord, Sendab
         self.type = message.type.rawValue
         self.timestamp = message.timestamp
         self.isFromMe = message.isFromMe
+        self.attachmentData = message.attachmentData
+        self.attachmentMimeType = message.attachmentMimeType
     }
 
     public func toMessage() -> Message? {
@@ -33,7 +37,9 @@ public struct MessageRecord: Codable, FetchableRecord, PersistableRecord, Sendab
             body: body,
             type: messageType,
             timestamp: timestamp,
-            isFromMe: isFromMe
+            isFromMe: isFromMe,
+            attachmentData: attachmentData,
+            attachmentMimeType: attachmentMimeType
         )
     }
 }
@@ -65,11 +71,18 @@ public final class DatabaseManager {
 
     // MARK: - Public API
 
-    public func save(_ message: Message) throws {
-        guard message.type == .text else { return }
+    @discardableResult
+    public func save(_ message: Message) throws -> Bool {
+        guard message.type == .text || message.type == .screenshot else { return false }
         let record = MessageRecord(from: message)
-        try dbQueue.write { db in
+        return try dbQueue.write { db in
+            let existingCount = try MessageRecord
+                .filter(Column("id") == record.id)
+                .fetchCount(db)
+            guard existingCount == 0 else { return false }
+
             try record.insert(db)
+            return true
         }
     }
 
@@ -90,7 +103,7 @@ public final class DatabaseManager {
 
     public func clearHistory() throws {
         try dbQueue.write { db in
-            try MessageRecord.deleteAll(db)
+            _ = try MessageRecord.deleteAll(db)
         }
         messages = []
     }
@@ -107,6 +120,12 @@ public final class DatabaseManager {
                 t.column("type", .text).notNull()
                 t.column("timestamp", .datetime).notNull()
                 t.column("isFromMe", .boolean).notNull()
+            }
+        }
+        migrator.registerMigration("v2") { db in
+            try db.alter(table: "messages") { t in
+                t.add(column: "attachmentData", .blob)
+                t.add(column: "attachmentMimeType", .text)
             }
         }
         try migrator.migrate(dbQueue)

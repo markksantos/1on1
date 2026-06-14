@@ -10,6 +10,7 @@ final class ConversationWindowController {
     private let onClearHistory: () -> Void
     var onOpenSettings: (() -> Void)?
     var onDeleteMessage: ((UUID) -> Void)?
+    var onResendMessage: ((UUID) -> Void)?
     var onReconnect: (() -> Void)?
     var onMarkRead: (() -> Void)?
 
@@ -30,6 +31,7 @@ final class ConversationWindowController {
             onClearHistory: onClearHistory,
             onOpenSettings: { [weak self] in self?.onOpenSettings?() },
             onDeleteMessage: { [weak self] id in self?.onDeleteMessage?(id) },
+            onResendMessage: { [weak self] id in self?.onResendMessage?(id) },
             onReconnect: { [weak self] in self?.onReconnect?() },
             onMarkRead: { [weak self] in self?.onMarkRead?() }
         )

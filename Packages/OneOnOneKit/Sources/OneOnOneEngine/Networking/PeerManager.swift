@@ -26,6 +26,9 @@ public final class PeerManager: NSObject, @unchecked Sendable {
 
     // MARK: - Private
     private let myPeerID: MCPeerID
+    /// Snapshot of `myPeerID.displayName`, safe to read from the nonisolated
+    /// browser/advertiser delegate callbacks. `MCPeerID.displayName` is immutable.
+    private nonisolated let myDisplayName: String
     nonisolated(unsafe) private let _session: MCSession
     private var advertiser: MCNearbyServiceAdvertiser?
     private var browser: MCNearbyServiceBrowser?
@@ -54,6 +57,7 @@ public final class PeerManager: NSObject, @unchecked Sendable {
             }
         }
 
+        myDisplayName = myPeerID.displayName
         _session = MCSession(peer: myPeerID, securityIdentity: nil, encryptionPreference: .required)
         super.init()
         _session.delegate = self
@@ -62,6 +66,10 @@ public final class PeerManager: NSObject, @unchecked Sendable {
     // MARK: - Public API
 
     public func start() {
+        if !isConnected {
+            connectionStatus = .connecting
+            onConnectionChanged?(.connecting)
+        }
         startAdvertising()
         startBrowsing()
         logger.info("PeerManager started as \(self.myPeerID.displayName)")
@@ -76,6 +84,7 @@ public final class PeerManager: NSObject, @unchecked Sendable {
         isConnected = false
         connectionStatus = .offline
         connectedPeer = nil
+        onConnectionChanged?(.offline)
     }
 
     public func reconnectNow() {
@@ -85,22 +94,37 @@ public final class PeerManager: NSObject, @unchecked Sendable {
         start()
     }
 
-    public func send(_ message: Message) {
+    @discardableResult
+    public func send(_ message: Message) -> Bool {
         guard let data = try? message.encoded(),
               !_session.connectedPeers.isEmpty else {
             logger.warning("Cannot send — no connected peers")
-            return
+            return false
         }
         do {
             try _session.send(data, toPeers: _session.connectedPeers, with: .reliable)
+            return true
         } catch {
             logger.error("Send failed: \(error.localizedDescription)")
+            return false
         }
+    }
+
+    // MARK: - Invitation tie-break
+
+    /// Decides whether this peer should send the invitation when it discovers
+    /// `peerDisplayName`. Only the lexicographically-lower name invites, so the
+    /// two symmetric discoveries don't both fire and collide. When names are
+    /// equal (e.g. two Macs both named "Mac"), both sides invite — a duplicate
+    /// session is recoverable, never connecting is not.
+    nonisolated static func shouldInvite(myDisplayName: String, peerDisplayName: String) -> Bool {
+        myDisplayName <= peerDisplayName
     }
 
     // MARK: - Private Networking
 
     private func startAdvertising() {
+        advertiser?.stopAdvertisingPeer()
         let adv = MCNearbyServiceAdvertiser(peer: myPeerID, discoveryInfo: nil, serviceType: Self.serviceType)
         adv.delegate = self
         adv.startAdvertisingPeer()
@@ -108,6 +132,7 @@ public final class PeerManager: NSObject, @unchecked Sendable {
     }
 
     private func startBrowsing() {
+        browser?.stopBrowsingForPeers()
         let brw = MCNearbyServiceBrowser(peer: myPeerID, serviceType: Self.serviceType)
         brw.delegate = self
         brw.startBrowsingForPeers()
@@ -182,19 +207,22 @@ extension PeerManager: MCSessionDelegate {
             logger.warning("Failed to decode message from \(peerID.displayName)")
             return
         }
+        let incoming = message.receivedFromRemote()
         Task { @MainActor [weak self] in
             guard let self else { return }
-            switch message.type {
+            switch incoming.type {
             case .typingStarted:
                 self.onTypingStateChanged?(true)
                 self.startTypingTimeout()
             case .typingStopped:
                 self.typingTimeoutTask?.cancel()
                 self.onTypingStateChanged?(false)
-            case .text, .readReceipt:
+            case .presence:
+                self.onMessageReceived?(incoming)
+            case .text, .screenshot, .readReceipt:
                 self.typingTimeoutTask?.cancel()
                 self.onTypingStateChanged?(false)
-                self.onMessageReceived?(message)
+                self.onMessageReceived?(incoming)
             }
         }
     }
@@ -220,6 +248,16 @@ extension PeerManager: MCNearbyServiceAdvertiserDelegate {
 extension PeerManager: MCNearbyServiceBrowserDelegate {
     nonisolated public func browser(_ browser: MCNearbyServiceBrowser, foundPeer peerID: MCPeerID, withDiscoveryInfo info: [String: String]?) {
         logger.info("Found peer: \(peerID.displayName)")
+
+        // Both peers advertise AND browse, so each one discovers the other and
+        // would fire an invitation. Two simultaneous invitations collide and
+        // produce flaky/duplicate sessions. Break the tie deterministically (see
+        // `shouldInvite`): only the peer with the lexicographically-lower display
+        // name invites; the other side accepts via the advertiser delegate.
+        guard Self.shouldInvite(myDisplayName: myDisplayName, peerDisplayName: peerID.displayName) else {
+            logger.info("Deferring to \(peerID.displayName) as inviter")
+            return
+        }
         browser.invitePeer(peerID, to: _session, withContext: nil, timeout: 10)
     }
 

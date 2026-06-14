@@ -24,7 +24,7 @@
 - **Smart Routing** — TransportRouter prefers local MC when available, falls back to CloudKit automatically, deduplicates by message ID
 - **Message History** — GRDB-backed SQLite persistence with iMessage-style conversation bubbles and live UI updates via ValueObservation
 - **Typing Indicators** — Real-time typing state with 3-second debounce, animated status bar icon
-- **AES-256-GCM Encryption** — Messages encrypted with CryptoKit, symmetric key stored in Keychain
+- **Encrypted Transport** — Local messaging requires MultipeerConnectivity encryption; CloudKit relay payloads use CryptoKit AES-GCM with keys derived from the shared room code
 - **Screenshot Sharing** — Capture and send screenshots with Cmd+Shift+2 via ScreenCaptureKit
 - **Quiet Hours** — Queue incoming messages during set hours, deliver them all when quiet hours end
 - **Global Hotkeys** — Cmd+Shift+1 to compose, Cmd+Shift+2 to screenshot
@@ -54,6 +54,18 @@ On first launch, macOS will prompt for:
 - **Local Network** — Required for peer-to-peer discovery and messaging
 - **Screen Recording** — Required for screenshot sharing (Cmd+Shift+2)
 
+### CloudKit Relay Setup
+
+Local peer-to-peer messaging builds and runs with a standard Mac development profile. The internet relay requires a paid Apple Developer team with iCloud/CloudKit enabled for `com.markstudios.OneOnOne`.
+
+To ship relay support:
+
+1. Enable iCloud and CloudKit for the app identifier in Apple Developer.
+2. Add the app's CloudKit container to `OneOnOne/OneOnOne.entitlements` and `project.yml`.
+3. Create the public `Message` record type in CloudKit Dashboard with queryable `roomHash` and `timestamp` fields.
+
+If the app is signed without CloudKit capability, the relay stays inactive and local peer-to-peer messaging still works.
+
 ## Tech Stack
 
 | Component | Technology |
@@ -63,7 +75,7 @@ On first launch, macOS will prompt for:
 | Networking | MultipeerConnectivity |
 | Cloud Relay | CloudKit |
 | Database | GRDB.swift (SQLite) |
-| Encryption | CryptoKit (AES-256-GCM) |
+| Encryption | MultipeerConnectivity encryption + CryptoKit AES-GCM for relay payloads |
 | Hotkeys | HotKey (soffes/HotKey) |
 | Screenshots | ScreenCaptureKit |
 | Build System | XcodeGen + SPM |

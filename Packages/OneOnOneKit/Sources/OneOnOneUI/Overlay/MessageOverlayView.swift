@@ -1,8 +1,10 @@
+import AppKit
 import SwiftUI
 import OneOnOneEngine
 
 public struct MessageOverlayView: View {
     let message: Message
+    let panelWidth: CGFloat
     let onReply: ((String) -> Void)?
     let onDismiss: () -> Void
 
@@ -13,10 +15,12 @@ public struct MessageOverlayView: View {
 
     public init(
         message: Message,
+        panelWidth: CGFloat = 420,
         onReply: ((String) -> Void)?,
         onDismiss: @escaping () -> Void
     ) {
         self.message = message
+        self.panelWidth = panelWidth
         self.onReply = onReply
         self.onDismiss = onDismiss
     }
@@ -28,7 +32,7 @@ public struct MessageOverlayView: View {
             replyArea
         }
         .padding(24)
-        .frame(width: 420)
+        .frame(width: panelWidth)
         .background {
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .fill(.ultraThickMaterial)
@@ -100,12 +104,24 @@ public struct MessageOverlayView: View {
     }
 
     private var messageBody: some View {
-        Text(linkAttributedString(from: message.body))
-            .font(.system(size: 22, weight: .medium))
-            .multilineTextAlignment(.leading)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.vertical, 4)
-            .textSelection(.enabled)
+        VStack(alignment: .leading, spacing: 10) {
+            if let image = screenshotImage {
+                Image(nsImage: image)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: screenshotThumbnailWidth, height: screenshotThumbnailHeight)
+                    .background(.black.opacity(0.08))
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .accessibilityLabel("Screenshot")
+            }
+
+            Text(linkAttributedString(from: message.body))
+                .font(.system(size: message.type == .screenshot ? 16 : 22, weight: .medium))
+                .multilineTextAlignment(.leading)
+                .textSelection(.enabled)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 4)
     }
 
     @ViewBuilder
@@ -156,5 +172,19 @@ public struct MessageOverlayView: View {
         replyText = ""
         isReplying = false
         onDismiss()
+    }
+
+    private var screenshotImage: NSImage? {
+        guard message.type == .screenshot,
+              let attachmentData = message.attachmentData else { return nil }
+        return NSImage(data: attachmentData)
+    }
+
+    private var screenshotThumbnailWidth: CGFloat {
+        max(240, panelWidth - 48)
+    }
+
+    private var screenshotThumbnailHeight: CGFloat {
+        min(220, screenshotThumbnailWidth * 9 / 16)
     }
 }

@@ -9,6 +9,8 @@ final class StatusBarController: NSObject {
 
     var onShowHistory: (() -> Void)?
     var onShowSettings: (() -> Void)?
+    var onShowAbout: (() -> Void)?
+    var onUserActivity: (() -> Void)?
 
     private let appState: AppState
 
@@ -17,45 +19,30 @@ final class StatusBarController: NSObject {
         super.init()
     }
 
-    func setup(composeView: NSView) {
+    /// Sets up the status item and the popover. The hosting controller manages
+    /// SwiftUI lifecycle and auto-sizes the popover to fit the current content.
+    func setup<V: View>(rootView: V) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
 
         if let button = statusItem.button {
-            setTemplateImage("bubble.left.and.bubble.right", on: button)
+            updateIcon(on: button)
             button.action = #selector(handleClick(_:))
             button.target = self
             button.sendAction(on: [.leftMouseUp, .rightMouseUp])
         }
 
+        let hostingController = NSHostingController(rootView: rootView)
+        hostingController.sizingOptions = [.preferredContentSize]
+
         popover = NSPopover()
-        popover.contentSize = NSSize(width: 300, height: 120)
-        popover.behavior = .semitransient
+        popover.behavior = .transient
         popover.animates = true
-        popover.contentViewController = NSViewController()
-        popover.contentViewController?.view = composeView
+        popover.contentViewController = hostingController
     }
 
     func updateIcon() {
         guard let button = statusItem?.button else { return }
-
-        // Use distinct symbols for each state — template images adapt to menu bar appearance
-        let symbolName: String
-        if appState.isPartnerTyping {
-            symbolName = "ellipsis.bubble"
-        } else if appState.unreadCount > 0 {
-            symbolName = "exclamationmark.bubble"
-        } else {
-            switch appState.connectionStatus {
-            case .connected:
-                symbolName = "bubble.left.and.bubble.right.fill"
-            case .connecting, .reconnecting:
-                symbolName = "bubble.left.and.bubble.right"
-            case .offline:
-                symbolName = "bubble.left.and.bubble.right"
-            }
-        }
-
-        setTemplateImage(symbolName, on: button)
+        updateIcon(on: button)
     }
 
     @objc func togglePopover() {
@@ -67,16 +54,81 @@ final class StatusBarController: NSObject {
             updateIcon()
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
             popover.contentViewController?.view.window?.makeKey()
+            NSApp.activate(ignoringOtherApps: true)
+            onUserActivity?()
         }
     }
 
-    // MARK: - Private
+    // MARK: - Icon
 
-    private func setTemplateImage(_ symbolName: String, on button: NSStatusBarButton) {
-        let image = NSImage(systemSymbolName: symbolName, accessibilityDescription: "1on1")
+    /// Filled SF Symbols render with more visual weight in the menu bar than thin
+    /// outlines, which can disappear against dark wallpapers.
+    private func updateIcon(on button: NSStatusBarButton) {
+        let symbolName: String
+        if appState.isPartnerTyping {
+            symbolName = "ellipsis.message.fill"
+        } else if appState.unreadCount > 0 {
+            symbolName = "exclamationmark.message.fill"
+        } else {
+            switch appState.connectionStatus {
+            case .connected:
+                symbolName = "bubble.left.and.bubble.right.fill"
+            case .connecting, .reconnecting:
+                symbolName = appState.isRelayActive ? "icloud.fill" : "bubble.left.and.bubble.right.fill"
+            case .offline:
+                symbolName = appState.isRelayActive ? "icloud.fill" : "bubble.left.and.bubble.right.fill"
+            }
+        }
+
+        let config = NSImage.SymbolConfiguration(pointSize: 15, weight: .semibold)
+        let image = NSImage(systemSymbolName: symbolName, accessibilityDescription: "1on1")?
+            .withSymbolConfiguration(config)
         image?.isTemplate = true
         button.image = image
+        button.contentTintColor = statusTintColor
+        button.appearsDisabled = false
+        button.toolTip = currentTooltip
     }
+
+    private var currentTooltip: String {
+        let partner = appState.partnerName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let unread = appState.unreadCount > 0 ? " · \(appState.unreadCount) unread" : ""
+        let state: String
+        switch appState.connectionStatus {
+        case .connected:
+            state = partner.isEmpty ? "Connected" : "Connected to \(partner)"
+        case .connecting:
+            state = "Connecting…"
+        case .reconnecting:
+            state = appState.isRelayActive ? "Relay ready" : "Reconnecting…"
+        case .offline:
+            state = appState.isRelayActive ? "Relay ready" : "Waiting for partner"
+        }
+        return "1on1 — \(state)\(unread)"
+    }
+
+    /// Returns a tint only when conveying real status. Returning nil lets the
+    /// menu bar render the template image with its own foreground color, which
+    /// adapts to dark/light backgrounds correctly.
+    private var statusTintColor: NSColor? {
+        if appState.unreadCount > 0 {
+            return .systemRed
+        }
+        if appState.isPartnerTyping {
+            return .systemBlue
+        }
+
+        switch appState.connectionStatus {
+        case .connected:
+            return .systemGreen
+        case .connecting, .reconnecting:
+            return appState.isRelayActive ? .systemBlue : nil
+        case .offline:
+            return appState.isRelayActive ? .systemBlue : nil
+        }
+    }
+
+    // MARK: - Click handling
 
     @objc private func handleClick(_ sender: NSStatusBarButton) {
         guard let event = NSApp.currentEvent else {
@@ -92,6 +144,7 @@ final class StatusBarController: NSObject {
 
     @objc private func showHistory() { onShowHistory?() }
     @objc private func showSettings() { onShowSettings?() }
+    @objc private func showAbout() { onShowAbout?() }
 
     private func showContextMenu() {
         let menu = NSMenu()
@@ -106,16 +159,25 @@ final class StatusBarController: NSObject {
 
         menu.addItem(.separator())
 
+        let aboutItem = NSMenuItem(title: "About 1on1", action: #selector(showAbout), keyEquivalent: "")
+        aboutItem.target = self
+        menu.addItem(aboutItem)
+
         let statusText: String
+        let partnerName = appState.partnerName.trimmingCharacters(in: .whitespacesAndNewlines)
         switch appState.connectionStatus {
-        case .connected: statusText = "Connected to \(appState.partnerName)"
-        case .connecting: statusText = "Connecting…"
-        case .reconnecting: statusText = "Reconnecting…"
-        case .offline: statusText = "Offline"
+        case .connected:
+            statusText = partnerName.isEmpty ? "Connected" : "Connected to \(partnerName)"
+        case .connecting:
+            statusText = "Connecting…"
+        case .reconnecting:
+            statusText = appState.isRelayActive ? "Relay Ready" : "Reconnecting…"
+        case .offline:
+            statusText = appState.isRelayActive ? "Relay Ready" : "Waiting for partner…"
         }
-        let statusItem = NSMenuItem(title: statusText, action: nil, keyEquivalent: "")
-        statusItem.isEnabled = false
-        menu.addItem(statusItem)
+        let statusMenuItem = NSMenuItem(title: statusText, action: nil, keyEquivalent: "")
+        statusMenuItem.isEnabled = false
+        menu.addItem(statusMenuItem)
 
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Quit 1on1", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))

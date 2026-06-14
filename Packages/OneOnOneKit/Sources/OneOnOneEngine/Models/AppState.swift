@@ -1,6 +1,7 @@
 import Foundation
 
 public enum DeliveryStatus: String, Sendable {
+    case queued
     case sending
     case sent
     case failed
@@ -15,6 +16,7 @@ public final class AppState {
     public var isConnected = false
     public var partnerName: String = ""
     public var isPartnerTyping = false
+    public var isRelayActive = false
     public var messages: [Message] = []
     public var connectionStatus: ConnectionStatus = .offline
     public var unreadCount: Int = 0
