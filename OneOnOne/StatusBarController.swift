@@ -11,6 +11,7 @@ final class StatusBarController: NSObject {
     var onShowSettings: (() -> Void)?
     var onShowAbout: (() -> Void)?
     var onUserActivity: (() -> Void)?
+    var onMarkRead: (() -> Void)?
 
     private let appState: AppState
 
@@ -50,7 +51,16 @@ final class StatusBarController: NSObject {
         if popover.isShown {
             popover.performClose(nil)
         } else {
-            appState.unreadCount = 0
+            // Opening the popover counts as reading: clear the badge, flush the
+            // quiet-hours queue, and send a read receipt — all owned by the
+            // AppDelegate's mark-read path so this matches the history window.
+            // Falling back to a direct reset keeps the badge correct even if no
+            // handler is wired.
+            if let onMarkRead {
+                onMarkRead()
+            } else {
+                appState.unreadCount = 0
+            }
             updateIcon()
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
             popover.contentViewController?.view.window?.makeKey()

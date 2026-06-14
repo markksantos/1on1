@@ -286,6 +286,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusBar.onUserActivity = { [weak self] in
             self?.cloudRelay?.bumpToActivePolling()
         }
+        statusBar.onMarkRead = { [weak self] in
+            self?.markMessagesRead()
+        }
         conversationWindowController?.onOpenSettings = openSettings
         conversationWindowController?.onDeleteMessage = { [weak self] id in
             try? self?.databaseManager?.deleteMessage(id: id)
